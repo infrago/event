@@ -1,2 +1,2 @@
 # event
-infra.go event module.
+infra.Go event module.
