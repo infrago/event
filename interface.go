@@ -10,22 +10,22 @@ import (
 	"github.com/panjf2000/ants/v2"
 )
 
-func (this *Module) Register(obj infra.Object) {
-	switch config := obj.Object.(type) {
+func (this *Module) Register(name string, value Any) {
+	switch val := value.(type) {
 	case Driver:
-		this.Driver(obj.Name, config)
+		this.Driver(name, val)
 	case Config:
-		this.Config(obj.Name, config)
+		this.Config(name, val)
 	case Configs:
-		this.Configs(config)
+		this.Configs(val)
 	case Event:
-		this.Event(obj.Name, config)
+		this.Event(name, val)
 	case Notice:
-		this.Notice(obj.Name, config)
+		this.Notice(name, val)
 	case Filter:
-		this.Filter(obj.Name, config)
+		this.Filter(name, val)
 	case Handler:
-		this.Handler(obj.Name, config)
+		this.Handler(name, val)
 	}
 }
 
