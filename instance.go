@@ -31,13 +31,18 @@ func (this *Instance) Serve(name string, data []byte) {
 // 加入payload直解
 func (this *Instance) parse(data []byte) (infra.Metadata, error) {
 	metadata := infra.Metadata{}
-	err := infra.Unmarshal(this.Config.Codec, data, &metadata)
-	if err != nil {
-		//原始数据结构，直接当Payload
+
+	if this.Config.External {
+		//外部直接解析
 		payload := Map{}
-		err = infra.Unmarshal(this.Config.Codec, data, &payload)
+		err := infra.Unmarshal(this.Config.Codec, data, &payload)
 		if err == nil {
 			metadata.Payload = payload
+		}
+	} else {
+		//内部
+		err := infra.Unmarshal(this.Config.Codec, data, &metadata)
+		if err == nil {
 		}
 	}
 

@@ -62,11 +62,12 @@ type (
 
 	Configs map[string]Config
 	Config  struct {
-		Driver  string
-		Codec   string
-		Weight  int
-		Prefix  string
-		Setting Map
+		Driver   string
+		External bool
+		Codec    string
+		Weight   int
+		Prefix   string
+		Setting  Map
 	}
 	Instance struct {
 		module  *Module
@@ -117,7 +118,6 @@ func (this *Module) Configs(config Configs) {
 }
 
 // publish 统一真实的发消息
-// 更新发布消息必须事先声明
 func (this *Module) publish(conn, name string, values ...Map) error {
 	if name == "" {
 		return ErrInvalidMsg
@@ -149,11 +149,25 @@ func (this *Module) publish(conn, name string, values ...Map) error {
 		}
 	}
 
-	bytes, err := infra.Marshal(inst.Config.Codec, &meta)
-	if err != nil {
-		return err
+	var dataBytes []byte
+
+	//根据配置来使用原始编码
+	//一般来说连接外部队列，可能会直接发送json出去
+	if inst.Config.External {
+		bytes, err := infra.Marshal(inst.Config.Codec, &meta.Payload)
+		if err != nil {
+			return err
+		}
+		dataBytes = bytes
+	} else {
+		//内部走meta发消息
+		bytes, err := infra.Marshal(inst.Config.Codec, &meta)
+		if err != nil {
+			return err
+		}
+		dataBytes = bytes
 	}
 
 	realName := inst.Config.Prefix + name
-	return inst.connect.Publish(realName, bytes)
+	return inst.connect.Publish(realName, dataBytes)
 }

@@ -42,6 +42,10 @@ func (this *Module) configure(name string, config Map) {
 		cfg.Driver = driver
 	}
 
+	if external, ok := config["external"].(bool); ok {
+		cfg.External = external
+	}
+
 	//分配权重
 	if weight, ok := config["weight"].(int); ok {
 		cfg.Weight = weight
@@ -103,6 +107,9 @@ func (this *Module) Initialize() {
 		for key, config := range this.configs {
 			if config.Weight == 0 {
 				config.Weight = 1
+			}
+			if config.External {
+				config.Weight = -1
 			}
 			this.configs[key] = config
 		}
@@ -210,7 +217,7 @@ func (this *Module) Connect() {
 		//注册，只有参与分布的才注册
 		//不参与的都是外部的
 		for msgName, msgConfig := range this.events {
-			if config.Weight > 0 || msgConfig.Connect == name {
+			if msgConfig.Connect == "" || msgConfig.Connect == "*" || msgConfig.Connect == name {
 				// 分组时，每一个订阅的group必须统一为同一个
 				realName := config.Prefix + msgName
 				realGroup := msgConfig.groupName
