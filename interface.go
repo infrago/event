@@ -20,8 +20,8 @@ func (this *Module) Register(name string, value Any) {
 		this.Configs(val)
 	case Event:
 		this.Event(name, val)
-	case Notice:
-		this.Notice(name, val)
+	case Declare:
+		this.Declare(name, val)
 	case Filter:
 		this.Filter(name, val)
 	case Handler:

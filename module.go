@@ -21,7 +21,7 @@ var (
 		instances: make(map[string]*Instance, 0),
 
 		events:   make(map[string]Event, 0),
-		notices:  make(map[string]Notice, 0),
+		declares: make(map[string]Declare, 0),
 		filters:  make(map[string]Filter, 0),
 		handlers: make(map[string]Handler, 0),
 	}
@@ -38,7 +38,7 @@ type (
 		drivers map[string]Driver
 
 		events   map[string]Event
-		notices  map[string]Notice
+		declares map[string]Declare
 		filters  map[string]Filter
 		handlers map[string]Handler
 
@@ -116,10 +116,11 @@ func (this *Module) Configs(config Configs) {
 	}
 }
 
-// notify 统一真实的发消息
-func (this *Module) notify(conn, name string, values ...Map) error {
+// publish 统一真实的发消息
+// 更新发布消息必须事先声明
+func (this *Module) publish(conn, name string, values ...Map) error {
 	if name == "" {
-		return errInvalidMsg
+		return ErrInvalidMsg
 	}
 	if conn == "" {
 		conn = this.hashring.Locate(name)
@@ -127,7 +128,7 @@ func (this *Module) notify(conn, name string, values ...Map) error {
 
 	inst, ok := module.instances[conn]
 	if ok == false {
-		return errInvalidConnection
+		return ErrInvalidConnection
 	}
 
 	var payload Map
@@ -137,11 +138,11 @@ func (this *Module) notify(conn, name string, values ...Map) error {
 
 	meta := infra.Metadata{Name: name, Payload: payload}
 
-	// 如果有预先定义消息，做一下参数处理
-	if notice, ok := this.notices[name]; ok {
-		if notice.Args != nil {
+	// 如果有预先，做一下参数处理
+	if declare, ok := this.declares[name]; ok {
+		if declare.Args != nil {
 			value := Map{}
-			res := infra.Mapping(notice.Args, meta.Payload, value, notice.Nullable, false)
+			res := infra.Mapping(declare.Args, meta.Payload, value, declare.Nullable, false)
 			if res == nil || res.OK() {
 				meta.Payload = value
 			}
@@ -154,5 +155,5 @@ func (this *Module) notify(conn, name string, values ...Map) error {
 	}
 
 	realName := inst.Config.Prefix + name
-	return inst.connect.Notify(realName, bytes)
+	return inst.connect.Publish(realName, bytes)
 }

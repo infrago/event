@@ -24,6 +24,6 @@ type (
 		Start() error
 		Stop() error
 
-		Notify(name string, data []byte) error
+		Publish(name string, data []byte) error
 	}
 )

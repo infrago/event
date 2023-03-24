@@ -5,11 +5,11 @@ import (
 )
 
 // Publish 发起消息
-func (this *Module) Notify(name string, values ...Map) error {
-	return this.notify("", name, values...)
+func (this *Module) Publish(name string, values ...Map) error {
+	return this.publish("", name, values...)
 }
 
-// notify 指定连接发起消息
-func (this *Module) NotifyTo(conn, name string, values ...Map) error {
-	return this.notify(conn, name, values...)
+// PublishTo 指定连接发起消息
+func (this *Module) PublishTo(conn, name string, values ...Map) error {
+	return this.publish(conn, name, values...)
 }

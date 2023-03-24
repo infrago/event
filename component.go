@@ -7,9 +7,9 @@ import (
 
 type (
 	Event struct {
+		Alias    []string `json:"alias"`
 		Name     string   `json:"name"`
 		Text     string   `json:"text"`
-		Alias    []string `json:"alias"`
 		Nullable bool     `json:"-"`
 		Args     Vars     `json:"args"`
 		Setting  Map      `json:"-"`
@@ -29,15 +29,16 @@ type (
 		groupName string `json:"-"`
 	}
 
-	// Notice 通知，表示当前节点会发出的事件预告
+	// Declare 声明，表示当前节点会发出的事件预告
 	// 比如，支付模块，可能会发布 pay.Success 之类的一系列的支付完成的事件
-	// 在集群模式下，应该会把节点的notice写入集群节点信息下
+	// 在集群模式下，应该会把节点的declare写入集群节点信息下
 	// 这样方便，生成分布式的文档，知道哪些节点会发布哪些通知出来
-	Notice struct {
-		Name     string `json:"name"`
-		Text     string `json:"text"`
-		Nullable bool   `json:"-"`
-		Args     Vars   `json:"args"`
+	Declare struct {
+		Alias    []string `json:"alias"`
+		Name     string   `json:"name"`
+		Text     string   `json:"text"`
+		Nullable bool     `json:"-"`
+		Args     Vars     `json:"args"`
 	}
 
 	// Filter 拦截器
@@ -61,9 +62,6 @@ type (
 )
 
 func (module *Module) Event(name string, config Event) {
-	module.mutex.Lock()
-	defer module.mutex.Unlock()
-
 	alias := make([]string, 0)
 	if name != "" {
 		alias = append(alias, name)
@@ -72,6 +70,7 @@ func (module *Module) Event(name string, config Event) {
 		alias = append(alias, config.Alias...)
 	}
 
+	module.mutex.Lock()
 	for _, key := range alias {
 		if infra.Override() {
 			module.events[key] = config
@@ -81,17 +80,33 @@ func (module *Module) Event(name string, config Event) {
 			}
 		}
 	}
+	module.mutex.Unlock()
+
+	//注册事件自动注册Declare
+	module.Declare(name, Declare{config.Alias, config.Name, config.Text, config.Nullable, config.Args})
 }
 
-// Notice 注册 预告
-func (module *Module) Notice(name string, config Notice) {
-	if infra.Override() {
-		module.notices[name] = config
-	} else {
-		if _, ok := module.notices[name]; ok == false {
-			module.notices[name] = config
+// Declare 声明
+func (module *Module) Declare(name string, config Declare) {
+	alias := make([]string, 0)
+	if name != "" {
+		alias = append(alias, name)
+	}
+	if config.Alias != nil {
+		alias = append(alias, config.Alias...)
+	}
+
+	module.mutex.Lock()
+	for _, key := range alias {
+		if infra.Override() {
+			module.declares[key] = config
+		} else {
+			if _, ok := module.declares[key]; ok == false {
+				module.declares[key] = config
+			}
 		}
 	}
+	module.mutex.Unlock()
 }
 
 // Filter 注册 拦截器

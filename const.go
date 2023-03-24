@@ -7,8 +7,8 @@ const (
 )
 
 var (
-	errInvalidConnection = errors.New("Invalid event connection.")
-	errInvalidNotice     = errors.New("Invalid event notice.")
-	errInvalidMsg        = errors.New("Invalid event msg.")
-	errInvalidWeight     = errors.New("Invalid event connection weight.")
+	ErrInvalidConnection = errors.New("Invalid event connection.")
+	ErrInvalidDeclare    = errors.New("Invalid event declare.")
+	ErrInvalidMsg        = errors.New("Invalid event msg.")
+	ErrInvalidWeight     = errors.New("Invalid event connection weight.")
 )
