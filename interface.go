@@ -1,6 +1,8 @@
 package event
 
 import (
+	"fmt"
+	"log"
 	"time"
 
 	. "github.com/infrago/base"
@@ -258,6 +260,8 @@ func (this *Module) Launch() {
 			panic("Failed to start event: " + err.Error())
 		}
 	}
+
+	log.Println(fmt.Sprintf("%s EVENT is running with %d connects, %d events.", infra.INFRAGO, len(this.instances), len(this.events)))
 
 	this.launched = true
 }
