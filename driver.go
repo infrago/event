@@ -1,5 +1,9 @@
 package event
 
+import (
+	. "github.com/infrago/base"
+)
+
 type (
 	// Driver 数据驱动
 	Driver interface {
@@ -7,10 +11,6 @@ type (
 	}
 	Health struct {
 		Workload int64
-	}
-
-	Delegate interface {
-		Serve(string, []byte)
 	}
 
 	// Connect 连接
@@ -25,5 +25,12 @@ type (
 		Stop() error
 
 		Publish(name string, data []byte) error
+	}
+
+	Instance struct {
+		connect Connect
+		Name    string
+		Config  Config
+		Setting Map
 	}
 )

@@ -69,12 +69,6 @@ type (
 		Prefix   string
 		Setting  Map
 	}
-	Instance struct {
-		module  *Module
-		Name    string
-		Config  Config
-		connect Connect
-	}
 )
 
 // Driver 注册驱动
