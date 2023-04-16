@@ -14,7 +14,7 @@ type (
 		nexts []ctxFunc //方法列表
 
 		// 以下几个字段必须独立
-		// 要不然，Invoke的时候，会被修改掉
+		// 要不然，Invoke的时候，因为同一个*Meta，所有会被修改掉
 		Name    string
 		Config  *Event
 		Setting Map
