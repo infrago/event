@@ -83,7 +83,7 @@ func (this *Module) Configure(global Map) {
 	defaultConfig := Map{}
 
 	for key, val := range config {
-		if conf, ok := val.(Map); ok {
+		if conf, ok := val.(Map); ok && key != "setting" {
 			this.configure(key, conf)
 		} else {
 			defaultConfig[key] = val
