@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/infrago/infra"
 	. "github.com/infrago/base"
+	"github.com/infrago/infra"
 	"github.com/infrago/util"
 )
 
@@ -77,9 +77,9 @@ type (
 	}
 
 	msgEnvelope struct {
-		Name     string          `json:"name"`
+		Name     string         `json:"name"`
 		Metadata infra.Metadata `json:"metadata"`
-		Payload  Map             `json:"payload"`
+		Payload  Map            `json:"payload"`
 	}
 )
 
@@ -298,9 +298,12 @@ func (m *Module) Open() {
 	}
 
 	weights := make(map[string]int, 0)
-	profile := infra.Identity().Profile
-	if profile == "" {
-		profile = infra.INFRAGO
+	role := infra.Identity().Role
+	if role == "" {
+		role = infra.Identity().Profile
+	}
+	if role == "" {
+		role = infra.INFRAGO
 	}
 	for name, cfg := range m.configs {
 		driver, ok := m.drivers[cfg.Driver]
@@ -327,7 +330,7 @@ func (m *Module) Open() {
 				if err := conn.Register(cfg.Prefix+broadcastSubjectPrefix+evName, ""); err != nil {
 					panic("failed to register event broadcast: " + err.Error())
 				}
-				if err := conn.Register(cfg.Prefix+publishSubjectPrefix+evName, profile); err != nil {
+				if err := conn.Register(cfg.Prefix+publishSubjectPrefix+evName, role); err != nil {
 					panic("failed to register event: " + err.Error())
 				}
 			}
