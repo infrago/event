@@ -3,9 +3,9 @@ module github.com/infrago/event
 go 1.25.3
 
 require (
-	github.com/infrago/base v0.12.0
-	github.com/infrago/infra v0.12.0
-	github.com/infrago/util v0.12.0
+	github.com/infrago/base v0.14.0
+	github.com/infrago/infra v0.14.0
+	github.com/infrago/util v0.14.0
 )
 
 require (
