@@ -1,8 +1,8 @@
 package event
 
 import (
-	"github.com/infrago/infra"
 	. "github.com/infrago/base"
+	"github.com/infrago/infra"
 )
 
 type (
@@ -64,4 +64,20 @@ func (ctx *Context) Failed(res Res) {
 func (ctx *Context) Denied(res Res) {
 	ctx.Result(res)
 	ctx.inst.denied(ctx)
+}
+
+func (ctx *Context) Publish(name string, values ...Map) error {
+	return module.publishMeta(ctx.Meta, "", name, values...)
+}
+
+func (ctx *Context) PublishTo(conn, name string, values ...Map) error {
+	return module.publishMeta(ctx.Meta, conn, name, values...)
+}
+
+func (ctx *Context) Broadcast(name string, values ...Map) error {
+	return module.broadcastMeta(ctx.Meta, "", name, values...)
+}
+
+func (ctx *Context) BroadcastTo(conn, name string, values ...Map) error {
+	return module.broadcastMeta(ctx.Meta, conn, name, values...)
 }

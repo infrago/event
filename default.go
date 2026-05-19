@@ -14,6 +14,7 @@ func init() {
 var (
 	errEventRunning    = errors.New("event is running")
 	errEventNotRunning = errors.New("event is not running")
+	errEventQueueFull  = errors.New("event queue is full")
 )
 
 type (
@@ -37,8 +38,11 @@ func (d *defaultDriver) Connect(inst *Instance) (Connection, error) {
 	}, nil
 }
 
-func (c *defaultConnection) Open() error  { return nil }
-func (c *defaultConnection) Close() error { return nil }
+func (c *defaultConnection) Open() error { return nil }
+func (c *defaultConnection) Close() error {
+	_ = c.Stop()
+	return nil
+}
 
 func (c *defaultConnection) Register(name, _ string) error {
 	c.mutex.Lock()
@@ -94,10 +98,21 @@ func (c *defaultConnection) Stop() error {
 func (c *defaultConnection) Publish(name string, data []byte) error {
 	c.mutex.RLock()
 	ch := c.events[name]
+	running := c.running
+	done := c.done
 	c.mutex.RUnlock()
 	if ch == nil {
-		return nil
+		return errInvalidEvent
 	}
-	ch <- data
-	return nil
+	if !running {
+		return errEventNotRunning
+	}
+	select {
+	case ch <- data:
+		return nil
+	case <-done:
+		return errEventNotRunning
+	default:
+		return errEventQueueFull
+	}
 }

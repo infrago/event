@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	. "github.com/infrago/base"
@@ -12,8 +13,9 @@ import (
 )
 
 var (
-	errInvalidEvent = errors.New("invalid event name")
-	errNoConnection = errors.New("invalid event connection")
+	errInvalidEvent        = errors.New("invalid event name")
+	errNoConnection        = errors.New("invalid event connection")
+	errInvalidEventPayload = errors.New("invalid event payload")
 )
 
 const (
@@ -407,6 +409,18 @@ func (m *Module) broadcast(connName, name string, values ...Map) error {
 }
 
 func (m *Module) publishMode(connName, mode, name string, values ...Map) error {
+	return m.publishModeMeta(nil, connName, mode, name, values...)
+}
+
+func (m *Module) publishMeta(meta *infra.Meta, connName, name string, values ...Map) error {
+	return m.publishModeMeta(meta, connName, publishSubjectPrefix, name, values...)
+}
+
+func (m *Module) broadcastMeta(meta *infra.Meta, connName, name string, values ...Map) error {
+	return m.publishModeMeta(meta, connName, broadcastSubjectPrefix, name, values...)
+}
+
+func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, values ...Map) error {
 	if name == "" {
 		return errInvalidEvent
 	}
@@ -414,14 +428,26 @@ func (m *Module) publishMode(connName, mode, name string, values ...Map) error {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
+	if _, ok := m.events[name]; !ok {
+		return errInvalidEvent
+	}
+
 	if connName == "" {
-		if m.hashring == nil {
-			return errNoConnection
+		eventCfg := m.events[name]
+		if eventCfg.Connect != "" && eventCfg.Connect != "*" {
+			connName = eventCfg.Connect
+		} else {
+			if m.hashring == nil {
+				return errNoConnection
+			}
+			connName = m.hashring.Locate(name)
 		}
-		connName = m.hashring.Locate(name)
 	}
 	inst, ok := m.instances[connName]
 	if !ok || inst == nil || inst.conn == nil {
+		return errNoConnection
+	}
+	if !m.eventConnectable(connName, name) {
 		return errNoConnection
 	}
 
@@ -436,9 +462,10 @@ func (m *Module) publishMode(connName, mode, name string, values ...Map) error {
 	if dec, ok := m.declares[name]; ok && dec.Args != nil {
 		mapped := Map{}
 		res := infra.Mapping(dec.Args, payload, mapped, dec.Nullable, false)
-		if res == nil || res.OK() {
-			payload = mapped
+		if res != nil && res.Fail() {
+			return fmt.Errorf("invalid event payload: %s", res.Error())
 		}
+		payload = mapped
 	}
 
 	var data []byte
@@ -449,9 +476,13 @@ func (m *Module) publishMode(connName, mode, name string, values ...Map) error {
 		}
 		data = bytes
 	} else {
+		metadata := infra.NewMeta().Metadata()
+		if meta != nil {
+			metadata = meta.Metadata()
+		}
 		body := msgEnvelope{
 			Name:     name,
-			Metadata: infra.NewMeta().Metadata(),
+			Metadata: metadata,
 			Payload:  payload,
 		}
 		bytes, err := infra.Marshal(inst.Config.Codec, body)
@@ -461,7 +492,31 @@ func (m *Module) publishMode(connName, mode, name string, values ...Map) error {
 		data = bytes
 	}
 
-	return inst.conn.Publish(inst.Config.Prefix+mode+name, data)
+	traceMeta := meta
+	if traceMeta == nil {
+		traceMeta = infra.NewMeta()
+	}
+	span := traceMeta.Begin("event:"+name, infra.TraceAttrs("infrago", infra.TraceKindEvent, name, Map{
+		"module":     "event",
+		"connection": inst.Name,
+		"operation":  "publish",
+		"mode":       strings.TrimSuffix(mode, "."),
+	}))
+	err := inst.conn.Publish(inst.Config.Prefix+mode+name, data)
+	if err != nil {
+		span.End(err)
+		return err
+	}
+	span.End()
+	return nil
+}
+
+func (m *Module) eventConnectable(connName, name string) bool {
+	ev, ok := m.events[name]
+	if !ok {
+		return false
+	}
+	return ev.Connect == "" || ev.Connect == "*" || ev.Connect == connName
 }
 
 func (inst *Instance) Submit(next func()) {
@@ -472,7 +527,18 @@ func (inst *Instance) Serve(name string, data []byte) {
 	go inst.serving(name, data)
 }
 
-func (inst *Instance) serving(name string, data []byte) {
+func (inst *Instance) ServeSync(name string, data []byte) (ok bool) {
+	ok = true
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	res := inst.serving(name, data)
+	return res == nil || !res.Fail()
+}
+
+func (inst *Instance) serving(name string, data []byte) Res {
 	if inst.Config.Prefix != "" && len(name) >= len(inst.Config.Prefix) && name[:len(inst.Config.Prefix)] == inst.Config.Prefix {
 		name = name[len(inst.Config.Prefix):]
 	}
@@ -491,16 +557,16 @@ func (inst *Instance) serving(name string, data []byte) {
 		Args:    Map{},
 		Locals:  Map{},
 	}
-	if cfg, ok := module.events[name]; ok {
-		ctx.Name = name
-		ctx.Config = &cfg
-		ctx.Setting = cfg.Setting
-	}
+	ctx.Name = name
+	inst.loadEvent(ctx, name)
 
+	var decodeErr error
 	if inst.Config.External {
 		payload := Map{}
 		if err := infra.Unmarshal(inst.Config.Codec, data, &payload); err == nil {
 			ctx.Value = payload
+		} else {
+			decodeErr = errors.Join(errInvalidEventPayload, err)
 		}
 	} else {
 		env := msgEnvelope{}
@@ -511,7 +577,10 @@ func (inst *Instance) serving(name string, data []byte) {
 			}
 			if env.Name != "" {
 				ctx.Name = env.Name
+				inst.loadEvent(ctx, env.Name)
 			}
+		} else {
+			decodeErr = errors.Join(errInvalidEventPayload, err)
 		}
 	}
 
@@ -521,12 +590,28 @@ func (inst *Instance) serving(name string, data []byte) {
 		"operation":  "consume",
 	}))
 
-	inst.open(ctx)
-	if res := ctx.Result(); res != nil && res.Fail() {
+	if decodeErr != nil {
+		ctx.Error(infra.ErrorResult(decodeErr))
+	} else {
+		inst.open(ctx)
+	}
+	res := ctx.Result()
+	if res != nil && res.Fail() {
 		span.End(res)
 	} else {
 		span.End()
 	}
+	return res
+}
+
+func (inst *Instance) loadEvent(ctx *Context, name string) {
+	if cfg, ok := module.events[name]; ok {
+		ctx.Config = &cfg
+		ctx.Setting = cfg.Setting
+		return
+	}
+	ctx.Config = nil
+	ctx.Setting = Map{}
 }
 
 func (inst *Instance) open(ctx *Context) {
