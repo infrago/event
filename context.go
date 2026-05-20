@@ -61,6 +61,11 @@ func (ctx *Context) Failed(res Res) {
 	ctx.inst.failed(ctx)
 }
 
+func (ctx *Context) Retry(res Res) {
+	ctx.Result(infra.RetryResult(res))
+	ctx.inst.failed(ctx)
+}
+
 func (ctx *Context) Denied(res Res) {
 	ctx.Result(res)
 	ctx.inst.denied(ctx)

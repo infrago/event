@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+	"unicode"
 
 	. "github.com/infrago/base"
 	"github.com/infrago/infra"
@@ -13,9 +15,13 @@ import (
 )
 
 var (
-	errInvalidEvent        = errors.New("invalid event name")
-	errNoConnection        = errors.New("invalid event connection")
-	errInvalidEventPayload = errors.New("invalid event payload")
+	ErrInvalidEvent        = errors.New("invalid event name")
+	ErrNoConnection        = errors.New("invalid event connection")
+	ErrInvalidEventPayload = errors.New("invalid event payload")
+
+	errInvalidEvent        = ErrInvalidEvent
+	errNoConnection        = ErrNoConnection
+	errInvalidEventPayload = ErrInvalidEventPayload
 )
 
 const (
@@ -70,12 +76,21 @@ type (
 	Configs map[string]Config
 
 	Config struct {
-		Driver   string
-		External bool
-		Codec    string
-		Weight   int
-		Prefix   string
-		Setting  Map
+		Driver       string
+		External     bool
+		Codec        string
+		Weight       int
+		Workers      int
+		Queue        int
+		QueuePolicy  string
+		DrainTimeout time.Duration
+		Prefix       string
+		Setting      Map
+	}
+
+	PayloadError struct {
+		Event  string
+		Result Res
 	}
 
 	msgEnvelope struct {
@@ -84,6 +99,23 @@ type (
 		Payload  Map            `json:"payload"`
 	}
 )
+
+func (err *PayloadError) Error() string {
+	if err == nil {
+		return ""
+	}
+	if err.Result == nil {
+		return errInvalidEventPayload.Error()
+	}
+	if err.Event == "" {
+		return err.Result.Error()
+	}
+	return fmt.Sprintf("%s: %s", err.Event, err.Result.Error())
+}
+
+func (err *PayloadError) Unwrap() error {
+	return errInvalidEventPayload
+}
 
 func (m *Module) Register(name string, value Any) {
 	switch v := value.(type) {
@@ -204,7 +236,7 @@ func (m *Module) configure(name string, conf Map) {
 		cfg.Codec = v
 	}
 	if v, ok := conf["prefix"].(string); ok {
-		cfg.Prefix = v
+		cfg.Prefix = normalizePrefix(v)
 	}
 	if v, ok := conf["weight"].(int); ok {
 		cfg.Weight = v
@@ -220,6 +252,10 @@ func (m *Module) configure(name string, conf Map) {
 			cfg.Weight = w
 		}
 	}
+	cfg.Workers = IntSetting(conf, "workers", cfg.Workers)
+	cfg.Queue = IntSetting(conf, "queue", cfg.Queue)
+	cfg.QueuePolicy = StringSetting(conf, "queue_policy", cfg.QueuePolicy)
+	cfg.DrainTimeout = DurationSetting(conf, "drain_timeout", cfg.DrainTimeout)
 	if v, ok := conf["setting"].(Map); ok {
 		cfg.Setting = v
 	}
@@ -249,6 +285,14 @@ func (m *Module) Setup() {
 		if cfg.Weight == 0 {
 			cfg.Weight = 1
 		}
+		if cfg.Workers < 0 {
+			cfg.Workers = 0
+		}
+		if cfg.Queue < 0 {
+			cfg.Queue = 0
+		}
+		cfg.Prefix = normalizePrefix(cfg.Prefix)
+		cfg.QueuePolicy = normalizeQueuePolicy(cfg.QueuePolicy)
 		m.configs[name] = cfg
 	}
 
@@ -359,7 +403,9 @@ func (m *Module) Start() {
 	}
 
 	for _, inst := range m.instances {
+		inst.startWorkers()
 		if err := inst.conn.Start(); err != nil {
+			inst.stopWorkers()
 			panic("failed to start event: " + err.Error())
 		}
 	}
@@ -377,6 +423,7 @@ func (m *Module) Stop() {
 	}
 	for _, inst := range m.instances {
 		_ = inst.conn.Stop()
+		inst.stopWorkers()
 	}
 	m.started = false
 }
@@ -391,6 +438,7 @@ func (m *Module) Close() {
 	for _, inst := range m.instances {
 		if inst.conn != nil {
 			_ = inst.conn.Close()
+			inst.stopWorkers()
 			inst.conn = nil
 		}
 	}
@@ -421,23 +469,23 @@ func (m *Module) broadcastMeta(meta *infra.Meta, connName, name string, values .
 }
 
 func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, values ...Map) error {
-	if name == "" {
-		return errInvalidEvent
+	if err := validateEventName(name); err != nil {
+		return err
 	}
 
 	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	if _, ok := m.events[name]; !ok {
+	eventCfg, ok := m.events[name]
+	if !ok {
+		m.mutex.RUnlock()
 		return errInvalidEvent
 	}
 
 	if connName == "" {
-		eventCfg := m.events[name]
 		if eventCfg.Connect != "" && eventCfg.Connect != "*" {
 			connName = eventCfg.Connect
 		} else {
 			if m.hashring == nil {
+				m.mutex.RUnlock()
 				return errNoConnection
 			}
 			connName = m.hashring.Locate(name)
@@ -445,11 +493,18 @@ func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, 
 	}
 	inst, ok := m.instances[connName]
 	if !ok || inst == nil || inst.conn == nil {
+		m.mutex.RUnlock()
 		return errNoConnection
 	}
-	if !m.eventConnectable(connName, name) {
+	if eventCfg.Connect != "" && eventCfg.Connect != "*" && eventCfg.Connect != connName {
+		m.mutex.RUnlock()
 		return errNoConnection
 	}
+	dec := m.declares[name]
+	conn := inst.conn
+	cfg := inst.Config
+	instName := inst.Name
+	m.mutex.RUnlock()
 
 	var payload Map
 	if len(values) > 0 {
@@ -459,18 +514,18 @@ func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, 
 		payload = Map{}
 	}
 
-	if dec, ok := m.declares[name]; ok && dec.Args != nil {
+	if dec.Args != nil {
 		mapped := Map{}
 		res := infra.Mapping(dec.Args, payload, mapped, dec.Nullable, false)
 		if res != nil && res.Fail() {
-			return fmt.Errorf("invalid event payload: %s", res.Error())
+			return &PayloadError{Event: name, Result: res}
 		}
 		payload = mapped
 	}
 
 	var data []byte
-	if inst.Config.External {
-		bytes, err := infra.Marshal(inst.Config.Codec, payload)
+	if cfg.External {
+		bytes, err := infra.Marshal(cfg.Codec, payload)
 		if err != nil {
 			return err
 		}
@@ -485,12 +540,15 @@ func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, 
 			Metadata: metadata,
 			Payload:  payload,
 		}
-		bytes, err := infra.Marshal(inst.Config.Codec, body)
+		bytes, err := infra.Marshal(cfg.Codec, body)
 		if err != nil {
 			return err
 		}
 		data = bytes
 	}
+
+	prefix := cfg.Prefix
+	subject := prefix + mode + name
 
 	traceMeta := meta
 	if traceMeta == nil {
@@ -498,11 +556,14 @@ func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, 
 	}
 	span := traceMeta.Begin("event:"+name, infra.TraceAttrs("infrago", infra.TraceKindEvent, name, Map{
 		"module":     "event",
-		"connection": inst.Name,
+		"connection": instName,
 		"operation":  "publish",
 		"mode":       strings.TrimSuffix(mode, "."),
+		"codec":      cfg.Codec,
+		"external":   cfg.External,
+		"bytes":      len(data),
 	}))
-	err := inst.conn.Publish(inst.Config.Prefix+mode+name, data)
+	err := conn.Publish(subject, data)
 	if err != nil {
 		span.End(err)
 		return err
@@ -520,7 +581,101 @@ func (m *Module) eventConnectable(connName, name string) bool {
 }
 
 func (inst *Instance) Submit(next func()) {
+	if next == nil {
+		return
+	}
+	policy := normalizeQueuePolicy(inst.Config.QueuePolicy)
+	if inst.tasks != nil && inst.workerStop != nil {
+		switch policy {
+		case "drop":
+			select {
+			case inst.tasks <- next:
+			case <-inst.workerStop:
+			default:
+			}
+		case "sync":
+			next()
+		case "async":
+			select {
+			case inst.tasks <- next:
+			case <-inst.workerStop:
+			default:
+				go next()
+			}
+		default:
+			select {
+			case inst.tasks <- next:
+			case <-inst.workerStop:
+			}
+		}
+		return
+	}
+	if policy == "sync" {
+		next()
+		return
+	}
 	go next()
+}
+
+func (inst *Instance) startWorkers() {
+	if inst.Config.Workers <= 0 || inst.tasks != nil {
+		return
+	}
+	queueSize := inst.Config.Queue
+	if queueSize <= 0 {
+		queueSize = inst.Config.Workers * 64
+	}
+	inst.tasks = make(chan func(), queueSize)
+	inst.workerStop = make(chan struct{})
+	for i := 0; i < inst.Config.Workers; i++ {
+		inst.workerWg.Add(1)
+		go func() {
+			defer inst.workerWg.Done()
+			for {
+				select {
+				case next := <-inst.tasks:
+					if next != nil {
+						next()
+					}
+				case <-inst.workerStop:
+					return
+				}
+			}
+		}()
+	}
+}
+
+func (inst *Instance) stopWorkers() {
+	if inst.workerStop == nil {
+		return
+	}
+	if inst.Config.DrainTimeout > 0 && inst.tasks != nil {
+		timer := time.NewTimer(inst.Config.DrainTimeout)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		drained := false
+		for !drained {
+			if len(inst.tasks) == 0 {
+				drained = true
+				break
+			}
+			select {
+			case <-timer.C:
+				drained = true
+			case <-ticker.C:
+			}
+		}
+		ticker.Stop()
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+	close(inst.workerStop)
+	inst.workerWg.Wait()
+	inst.tasks = nil
+	inst.workerStop = nil
 }
 
 func (inst *Instance) Serve(name string, data []byte) {
@@ -528,7 +683,6 @@ func (inst *Instance) Serve(name string, data []byte) {
 }
 
 func (inst *Instance) ServeSync(name string, data []byte) (ok bool) {
-	ok = true
 	defer func() {
 		if recover() != nil {
 			ok = false
@@ -538,7 +692,8 @@ func (inst *Instance) ServeSync(name string, data []byte) (ok bool) {
 	return res == nil || !res.Fail()
 }
 
-func (inst *Instance) serving(name string, data []byte) Res {
+func (inst *Instance) serving(name string, data []byte) (ret Res) {
+	start := time.Now()
 	if inst.Config.Prefix != "" && len(name) >= len(inst.Config.Prefix) && name[:len(inst.Config.Prefix)] == inst.Config.Prefix {
 		name = name[len(inst.Config.Prefix):]
 	}
@@ -588,20 +743,82 @@ func (inst *Instance) serving(name string, data []byte) Res {
 		"module":     "event",
 		"connection": inst.Name,
 		"operation":  "consume",
+		"codec":      inst.Config.Codec,
+		"external":   inst.Config.External,
+		"bytes":      len(data),
 	}))
+	defer func() {
+		if r := recover(); r != nil {
+			ret = infra.ErrorResult(fmt.Errorf("event panic: %v", r))
+		}
+		status := infra.OK.Status()
+		retry := false
+		if ret != nil && ret.Fail() {
+			status = ret.Status()
+			retry = infra.IsRetry(ret)
+		}
+		_ = ctx.Trace("event:"+ctx.Name, infra.TraceAttrs("infrago", infra.TraceKindEvent, ctx.Name, Map{
+			"module":      "event",
+			"connection":  inst.Name,
+			"operation":   "consume.done",
+			"status":      status,
+			"retry":       retry,
+			"duration_ms": time.Since(start).Milliseconds(),
+		}))
+		if ret != nil && ret.Fail() {
+			span.End(ret)
+		} else {
+			span.End()
+		}
+	}()
 
 	if decodeErr != nil {
 		ctx.Error(infra.ErrorResult(decodeErr))
 	} else {
 		inst.open(ctx)
 	}
-	res := ctx.Result()
-	if res != nil && res.Fail() {
-		span.End(res)
-	} else {
-		span.End()
+	ret = ctx.Result()
+	return ret
+}
+
+func validateEventName(name string) error {
+	if name == "" || strings.TrimSpace(name) != name {
+		return errInvalidEvent
 	}
-	return res
+	if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+		return errInvalidEvent
+	}
+	if strings.HasPrefix(name, publishSubjectPrefix) || strings.HasPrefix(name, broadcastSubjectPrefix) {
+		return errInvalidEvent
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return errInvalidEvent
+		}
+	}
+	return nil
+}
+
+func normalizePrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	if strings.HasSuffix(prefix, ".") || strings.HasSuffix(prefix, ":") || strings.HasSuffix(prefix, "/") {
+		return prefix
+	}
+	return prefix + "."
+}
+
+func normalizeQueuePolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "drop", "sync", "async":
+		return strings.ToLower(strings.TrimSpace(policy))
+	case "block":
+		return "block"
+	default:
+		return ""
+	}
 }
 
 func (inst *Instance) loadEvent(ctx *Context, name string) {

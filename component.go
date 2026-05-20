@@ -70,7 +70,7 @@ func (m *Module) RegisterEvent(name string, cfg Event) {
 		return
 	}
 	for _, key := range keys {
-		if key == "" {
+		if validateEventName(key) != nil {
 			continue
 		}
 		if infra.Override() {
@@ -80,7 +80,7 @@ func (m *Module) RegisterEvent(name string, cfg Event) {
 		}
 	}
 	for _, key := range keys {
-		if key == "" {
+		if validateEventName(key) != nil {
 			continue
 		}
 		if infra.Override() {
@@ -100,7 +100,7 @@ func (m *Module) RegisterDeclare(name string, cfg Declare) {
 		return
 	}
 	for _, key := range keys {
-		if key == "" {
+		if validateEventName(key) != nil {
 			continue
 		}
 		if infra.Override() {

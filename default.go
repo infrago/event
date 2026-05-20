@@ -12,9 +12,13 @@ func init() {
 }
 
 var (
-	errEventRunning    = errors.New("event is running")
-	errEventNotRunning = errors.New("event is not running")
-	errEventQueueFull  = errors.New("event queue is full")
+	ErrEventRunning    = errors.New("event is running")
+	ErrEventNotRunning = errors.New("event is not running")
+	ErrEventQueueFull  = errors.New("event queue is full")
+
+	errEventRunning    = ErrEventRunning
+	errEventNotRunning = ErrEventNotRunning
+	errEventQueueFull  = ErrEventQueueFull
 )
 
 type (
@@ -49,7 +53,17 @@ func (c *defaultConnection) Register(name, _ string) error {
 	defer c.mutex.Unlock()
 
 	if _, ok := c.events[name]; !ok {
-		c.events[name] = make(chan []byte, 64)
+		buffer := 64
+		if c.instance != nil {
+			buffer = IntSetting(c.instance.Setting, "buffer", buffer)
+			if c.instance.Config.Queue > 0 {
+				buffer = c.instance.Config.Queue
+			}
+		}
+		if buffer <= 0 {
+			buffer = 64
+		}
+		c.events[name] = make(chan []byte, buffer)
 	}
 	return nil
 }
