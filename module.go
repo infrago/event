@@ -474,8 +474,9 @@ func (m *Module) publishModeMeta(meta *infra.Meta, connName, mode, name string, 
 	}
 
 	m.mutex.RLock()
-	eventCfg, ok := m.events[name]
-	if !ok {
+	eventCfg, registered := m.events[name]
+	_, declared := m.declares[name]
+	if !registered && !declared {
 		m.mutex.RUnlock()
 		return errInvalidEvent
 	}

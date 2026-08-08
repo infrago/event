@@ -101,6 +101,27 @@ func TestPublishUsesConfiguredConnection(t *testing.T) {
 	}
 }
 
+func TestPublishAllowsDeclaredProducerWithoutConsumer(t *testing.T) {
+	m, conn := newTestModule()
+	m.RegisterDeclare("created", Declare{
+		Args: Vars{
+			"id": Var{Required: true},
+		},
+	})
+	m.Setup()
+	m.Open()
+
+	if err := m.publish("", "created", Map{"id": "1"}); err != nil {
+		t.Fatalf("publish from declared producer failed: %v", err)
+	}
+	if conn.published != 1 {
+		t.Fatalf("expected one publish, got %d", conn.published)
+	}
+	if conn.subject != "publish.created" {
+		t.Fatalf("unexpected subject %q", conn.subject)
+	}
+}
+
 func TestPublishRejectsInvalidEventName(t *testing.T) {
 	m, _ := newTestModule()
 	m.RegisterEvent("created", Event{})
