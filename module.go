@@ -410,7 +410,9 @@ func (m *Module) Start() {
 		}
 	}
 
-	fmt.Printf("infrago event module is running with %d connections, %d events.\n", len(m.instances), len(m.events))
+	infra.Log(infra.LogLevelInfo, "event", "module started", Map{
+		"connections": len(m.instances), "events": len(m.events),
+	})
 	m.started = true
 }
 
