@@ -1,6 +1,8 @@
 package event
 
 import (
+	"sync"
+
 	base "github.com/infrago/base"
 )
 
@@ -24,5 +26,9 @@ type (
 		Name    string
 		Config  Config
 		Setting base.Map
+
+		tasks      chan func()
+		workerStop chan struct{}
+		workerWg   sync.WaitGroup
 	}
 )
